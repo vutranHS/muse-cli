@@ -63,9 +63,9 @@ def augment_prompt(prompt, body):
     parts = [prompt]
     ratio = _ratio_for(body.get("size"))
     if ratio:
-        # short ratio + explicit anti-distort so circular artwork stays round
-        parts.append(f"{ratio} aspect ratio, keep the circular artwork a "
-                     "perfect circle, do not stretch or distort any element")
+        # short ratio + general anti-distort (no shape assumption)
+        parts.append(f"{ratio} aspect ratio; keep the artwork's original "
+                     "proportions, do not stretch, squash, or distort any element")
     q = (body.get("quality") or "").lower()
     if q in ("hd", "high", "max", "maximum", "best") and len(prompt) < 200:
         parts.append(_HQ)
