@@ -28,27 +28,48 @@ PORT = int(os.environ.get("MUSE_PORT", "8799"))
 WAIT = int(os.environ.get("MUSE_WAIT", "180"))
 
 
-# NOTE: we deliberately do NOT inject an aspect-ratio phrase from `size`.
-# Telling the model "9:16 vertical aspect ratio" makes it stretch the canvas and
-# distorts composed artwork (circular emblems become ovals). The behavior then
-# no longer matches generating from the app's chat box. Let the prompt itself
-# describe orientation. `size` is accepted (OpenAI compat) but not forced.
-#
-# Quality nudge is kept minimal and style-neutral so it never fights a detailed
-# prompt (avoid "photography"/"intricate detail" which impose a look). It is
-# applied only when the caller asks for it, and skipped for long/detailed
-# prompts that already specify the look.
 _HQ = "high resolution, sharp, clean edges"
+_RATIO = {
+    "1024x1024": "1:1", "512x512": "1:1", "2048x2048": "1:1",
+    "1792x1024": "16:9", "1344x768": "16:9", "1920x1080": "16:9",
+    "1024x1792": "9:16", "768x1344": "9:16", "1080x1920": "9:16",
+    "1536x1024": "3:2", "1024x1536": "2:3",
+}
+
+
+def _ratio_for(size):
+    s = (size or "").strip().lower()
+    if not s or s == "auto":
+        return None
+    if s in _RATIO:
+        return _RATIO[s]
+    if "x" in s:  # bucket any WxH into the nearest common ratio
+        try:
+            w, h = (int(x) for x in s.split("x")[:2])
+            r = w / h
+        except Exception:
+            return None
+        if abs(r - 1) <= 0.1:
+            return "1:1"
+        if r >= 1.2:
+            return "16:9"
+        if r <= 0.83:
+            return "9:16"
+        return "1:1"
+    return s if ":" in s else None  # allow passing "1:1"/"9:16" directly
 
 
 def augment_prompt(prompt, body):
-    # default to HD, but only nudge SHORT prompts; a long/detailed prompt already
-    # specifies its own look, so we pass it through untouched (matches the app's
-    # chat box). Explicit quality=standard/low opts out entirely.
-    q = (body.get("quality") or "hd").lower()
+    parts = [prompt]
+    ratio = _ratio_for(body.get("size"))
+    if ratio:
+        # short ratio + explicit anti-distort so circular artwork stays round
+        parts.append(f"{ratio} aspect ratio, keep the circular artwork a "
+                     "perfect circle, do not stretch or distort any element")
+    q = (body.get("quality") or "").lower()
     if q in ("hd", "high", "max", "maximum", "best") and len(prompt) < 200:
-        return prompt + " — " + _HQ
-    return prompt
+        parts.append(_HQ)
+    return " — ".join(parts) if len(parts) > 1 else prompt
 
 
 def account_from_model(model):

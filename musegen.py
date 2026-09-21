@@ -106,19 +106,19 @@ def _find_new_image(gw, session_id, deadline):
 
 
 def gen_once(gw, prompt, wait=150):
-    # Every gen runs in its OWN fresh session so concurrent gens never share a
-    # chat (no race, no cross-wired images). Cleaned up afterwards.
+    # Each gen runs in its OWN fresh session (clean context, no lag from a
+    # growing main chat, no cross-wiring). A fresh session tends to default to a
+    # tall 1:2 canvas, so the prompt must carry an explicit aspect + "keep the
+    # circle perfect, do not distort" hint (server.augment_prompt adds it).
     d = gw.call_json("session.start", body={
         "method": "/api/session/start",
         "params": {"origin": "fresh", "lifecycle": "persistent", "title": "gen"}})
     sid = d.get("session_id") or d.get("id")
-
     try:
         params = {"items": [{"type": "text", "text": prompt}],
                   "node_id": secrets.token_hex(8), "capabilities": {},
                   "session_id": sid}
         gw._open("chat.stream", body=params)
-
         path = _find_new_image(gw, sid, time.time() + wait)
         if not path:
             raise TimeoutError(f"no image within {wait}s")
