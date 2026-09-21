@@ -191,6 +191,10 @@ def gen(prompt, account=None, token_only=False, wait=150):
             gw = muse.Gateway(muse.load_cookies(f))
         except muse.AuthError as e:
             last = f"{name}: auth {e}"; print(f"[skip] {last}", file=sys.stderr); continue
+        except Exception as e:
+            # e.g. "Refused WebSocket upgrade: 503" — VM busy (one WS at a time)
+            # or cookies expired mid-connect. Rotate to the next account.
+            last = f"{name}: connect {e}"; print(f"[rotate] {last}", file=sys.stderr); continue
         try:
             path, data = gen_once(gw, prompt, wait)
             return name, path, data
