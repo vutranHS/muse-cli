@@ -10,7 +10,7 @@ accounts/<name>.txt, then verifies the gateway connects.
 Each account gets its own persistent profile under profiles/<name>, so the
 Facebook session (and 2FA trust) is remembered for next time.
 """
-import os, sys, time
+import json, os, re, sys, time, urllib.parse
 from playwright.sync_api import sync_playwright
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +33,25 @@ def onboard(name, timeout=600):
     os.makedirs(prof, exist_ok=True)
     out = os.path.join(HERE, "accounts", f"{name}.txt")
 
+    captured = {"email": None}
+
+    def on_req(req):
+        try:
+            if req.method != "POST" or captured["email"]:
+                return
+            u = req.url
+            if not any(s in u for s in ("login", "auth", "checkpoint",
+                                        "accounts.meta.com", "facebook.com")):
+                return
+            pd = req.post_data or ""
+            m = re.search(r'(?:^|&)(?:email|username|contactpoint|user|ur)=([^&]+)', pd)
+            if m:
+                v = urllib.parse.unquote_plus(m.group(1)).strip()
+                if v and ("@" in v or v.replace("+", "").isdigit() or len(v) >= 4):
+                    captured["email"] = v
+        except Exception:
+            pass
+
     with sync_playwright() as p:
         try:
             ctx = p.chromium.launch_persistent_context(
@@ -40,7 +59,9 @@ def onboard(name, timeout=600):
                 args=["--no-first-run", "--no-default-browser-check"])
         except Exception:
             ctx = p.chromium.launch_persistent_context(prof, headless=False)
+        ctx.on("page", lambda pg: pg.on("request", on_req))
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        page.on("request", on_req)
         page.goto("https://muse.ai/", wait_until="domcontentloaded")
         print("→ Log in with Facebook in the opened window. Waiting for session…")
 
@@ -57,11 +78,16 @@ def onboard(name, timeout=600):
             raise SystemExit("timed out waiting for login (no hatch_sess cookie)")
 
         cs = cookie_string(got)
+        uid = next((c["value"] for c in got if c["name"] == "c_user"), None)
         with open(out, "w") as fh:
             fh.write(cs + "\n")
         os.chmod(out, 0o600)
+        meta = {"name": name, "email": captured["email"], "fb_uid": uid,
+                "saved_at": int(time.time())}
+        with open(os.path.join(HERE, "accounts", f"{name}.json"), "w") as fh:
+            json.dump(meta, fh, indent=2)
         ctx.close()
-    print(f"saved {out}")
+    print(f"saved {out}  email={captured['email']!r} fb_uid={uid}")
 
     # verify
     gw = muse.Gateway(muse.load_cookies(out))

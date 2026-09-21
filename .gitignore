@@ -6,3 +6,4 @@ accounts/*.txt
 __pycache__/
 .idea/
 profiles/
+accounts/*.json
