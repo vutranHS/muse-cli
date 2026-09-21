@@ -28,40 +28,27 @@ PORT = int(os.environ.get("MUSE_PORT", "8799"))
 WAIT = int(os.environ.get("MUSE_WAIT", "180"))
 
 
-# Muse's Imagine model caps at ~2.3MP; resolution isn't a free knob, but aspect
-# ratio and quality descriptors are honored via the prompt. Map the OpenAI
-# size/quality fields onto natural-language hints.
-_ASPECT = {
-    "1792x1024": "16:9 widescreen", "1024x1792": "9:16 vertical",
-    "1536x1024": "3:2 landscape", "1024x1536": "2:3 portrait",
-    "1344x768": "16:9 widescreen", "768x1344": "9:16 vertical",
-    "1024x1024": "1:1 square", "auto": "", "": "",
-}
-_HQ = ("ultra-detailed, sharp focus, high resolution, intricate detail, "
-       "professional photography, best quality")
+# NOTE: we deliberately do NOT inject an aspect-ratio phrase from `size`.
+# Telling the model "9:16 vertical aspect ratio" makes it stretch the canvas and
+# distorts composed artwork (circular emblems become ovals). The behavior then
+# no longer matches generating from the app's chat box. Let the prompt itself
+# describe orientation. `size` is accepted (OpenAI compat) but not forced.
+#
+# Quality nudge is kept minimal and style-neutral so it never fights a detailed
+# prompt (avoid "photography"/"intricate detail" which impose a look). It is
+# applied only when the caller asks for it, and skipped for long/detailed
+# prompts that already specify the look.
+_HQ = "high resolution, sharp, clean edges"
 
 
 def augment_prompt(prompt, body):
-    extra = []
-    ar = _ASPECT.get((body.get("size") or "").lower())
-    if ar is None:  # unknown WxH -> derive orientation
-        s = (body.get("size") or "").lower()
-        if "x" in s:
-            try:
-                w, h = (int(x) for x in s.split("x")[:2])
-                ar = "16:9 widescreen" if w > h * 1.2 else "9:16 vertical" if h > w * 1.2 else "1:1 square"
-            except Exception:
-                ar = ""
-        else:
-            ar = ""
-    if ar:
-        extra.append(f"{ar} aspect ratio")
-    # default to HD when the caller doesn't specify quality; honor an explicit
-    # "standard"/"low" to opt out.
+    # default to HD, but only nudge SHORT prompts; a long/detailed prompt already
+    # specifies its own look, so we pass it through untouched (matches the app's
+    # chat box). Explicit quality=standard/low opts out entirely.
     q = (body.get("quality") or "hd").lower()
-    if q in ("hd", "high", "max", "maximum", "best"):
-        extra.append(_HQ)
-    return prompt + (" — " + ", ".join(extra) if extra else "")
+    if q in ("hd", "high", "max", "maximum", "best") and len(prompt) < 200:
+        return prompt + " — " + _HQ
+    return prompt
 
 
 def account_from_model(model):
