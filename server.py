@@ -25,7 +25,7 @@ import musegen  # gen(), accounts()
 
 HOST = os.environ.get("MUSE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MUSE_PORT", "8799"))
-WAIT = int(os.environ.get("MUSE_WAIT", "180"))
+WAIT = int(os.environ.get("MUSE_WAIT", "300"))
 # how long a request may wait in the queue for a free account before 429
 QUEUE_WAIT = int(os.environ.get("MUSE_QUEUE_WAIT", "900"))
 
