@@ -28,6 +28,39 @@ PORT = int(os.environ.get("MUSE_PORT", "8799"))
 WAIT = int(os.environ.get("MUSE_WAIT", "180"))
 
 
+# Muse's Imagine model caps at ~2.3MP; resolution isn't a free knob, but aspect
+# ratio and quality descriptors are honored via the prompt. Map the OpenAI
+# size/quality fields onto natural-language hints.
+_ASPECT = {
+    "1792x1024": "16:9 widescreen", "1024x1792": "9:16 vertical",
+    "1536x1024": "3:2 landscape", "1024x1536": "2:3 portrait",
+    "1344x768": "16:9 widescreen", "768x1344": "9:16 vertical",
+    "1024x1024": "1:1 square", "auto": "", "": "",
+}
+_HQ = ("ultra-detailed, sharp focus, high resolution, intricate detail, "
+       "professional photography, best quality")
+
+
+def augment_prompt(prompt, body):
+    extra = []
+    ar = _ASPECT.get((body.get("size") or "").lower())
+    if ar is None:  # unknown WxH -> derive orientation
+        s = (body.get("size") or "").lower()
+        if "x" in s:
+            try:
+                w, h = (int(x) for x in s.split("x")[:2])
+                ar = "16:9 widescreen" if w > h * 1.2 else "9:16 vertical" if h > w * 1.2 else "1:1 square"
+            except Exception:
+                ar = ""
+        else:
+            ar = ""
+    if ar:
+        extra.append(f"{ar} aspect ratio")
+    if (body.get("quality") or "").lower() in ("hd", "high", "max", "maximum", "best"):
+        extra.append(_HQ)
+    return prompt + (" — " + ", ".join(extra) if extra else "")
+
+
 def account_from_model(model):
     """'muse' / 'muse/default' -> rotate (None); 'muse/<name>' -> that account."""
     if not model:
@@ -93,11 +126,12 @@ class H(BaseHTTPRequestHandler):
         account = account_from_model(body.get("model"))
         count = int(body.get("n", 1) or 1)
         rf = body.get("response_format", "b64_json")
+        eff_prompt = augment_prompt(prompt, body)
 
         data = []
         try:
             for _ in range(count):
-                name, path, img = musegen.gen(prompt, account=account, wait=WAIT)
+                name, path, img = musegen.gen(eff_prompt, account=account, wait=WAIT)
                 if rf == "url":
                     # no hosted URL; return a data URL so OpenAI clients still work
                     b64 = base64.b64encode(img).decode()

@@ -78,3 +78,10 @@ curl -s localhost:8799/v1/usage | jq           # JSON per account
 Fields: tier, quota_status (SUFFICIENT = usable), percent_used (weekly),
 resets_at, topup_balance + topup_label ("additional tokens" add-on).
 gen() pre-checks quota_status and skips exhausted accounts instantly.
+
+## Image quality
+Muse's Imagine model caps at ~2.3MP (2048x1152 / 1920x1280 / 1024x1024 by
+aspect). The server maps OpenAI fields onto prompt hints:
+- `size`: "1792x1024"->16:9, "1024x1792"->9:16, "1024x1024"->1:1 (or WxH -> orientation)
+- `quality`: "hd"/"high"/"max" -> appends detail/quality descriptors
+We always fetch the raw (native-resolution) file, never a downscaled variant.

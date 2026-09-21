@@ -12,7 +12,7 @@
       .venv/bin/pip install curl_cffi noiseprotocol protobuf'   # NOT playwright
 
     # run as a service
-    sudo cp /opt/muse-farm/deploy/muse-server.service /etc/systemd/system/
+    sudo cp /root/muse-farm/deploy/muse-server.service /etc/systemd/system/
     sudo systemctl daemon-reload && sudo systemctl enable --now muse-server
     curl -s localhost:8799/v1/models   # sanity
 
