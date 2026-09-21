@@ -57,3 +57,13 @@ next account file. Exits non-zero only when all accounts are exhausted.
   tokens automatically.
 - Requires SIP nothing at runtime — LLDB/debug was only used during reverse
   engineering, not for normal operation.
+
+## OpenAI-compatible server (for 9router / any OpenAI client)
+```bash
+./.venv/bin/python server.py          # 127.0.0.1:8799
+curl -X POST localhost:8799/v1/images/generations \
+  -H 'content-type: application/json' \
+  -d '{"model":"muse/<account>","prompt":"..."}'   # -> {data:[{b64_json}]}
+```
+`model`: `muse` or `muse/default` = rotate accounts; `muse/<name>` = force one.
+`GET /v1/models` lists accounts. Env: MUSE_PORT, MUSE_HOST, MUSE_MEDIA_TIMEOUT.

@@ -87,10 +87,35 @@ def gen_once(gw, prompt, wait=150):
     muse.ROUTES["media.raw"] = {"method": "media.raw", "http": "GET",
                                "path": "/media/raw/" + path,
                                "responseType": "binary", "channel": "media"}
-    data = gw.request("media.raw", timeout=30)
-    if data[:4] not in (b"RIFF", b"\xff\xd8\xff\xe0", b"\x89PNG"):
-        raise RuntimeError(f"not an image: {data[:16]!r}")
-    return path, data
+    # request() returns whatever arrived when its deadline hits, so a slow/large
+    # image comes back truncated on a short timeout. Fetch with a generous
+    # timeout and verify the file is complete; retry once, then fail loudly.
+    to = int(os.environ.get("MUSE_MEDIA_TIMEOUT", "90"))
+    data = b""
+    for attempt in (1, 2):
+        data = gw.request("media.raw", timeout=to * attempt)
+        if _complete_image(data):
+            return path, data
+    raise RuntimeError(f"truncated image ({len(data)}B, "
+                       f"expected {_expected_len(data)}) after retries")
+
+
+def _expected_len(d):
+    if d[:4] == b"RIFF" and len(d) >= 8:
+        return int.from_bytes(d[4:8], "little") + 8
+    return -1
+
+
+def _complete_image(d):
+    if not d:
+        return False
+    if d[:4] == b"RIFF":                       # WebP
+        return len(d) >= _expected_len(d)
+    if d[:8] == b"\x89PNG\r\n\x1a\n":          # PNG
+        return d[-8:] == b"IEND\xaeB`\x82"
+    if d[:3] == b"\xff\xd8\xff":               # JPEG
+        return d[-2:] == b"\xff\xd9"
+    return False
 
 
 def gen(prompt, account=None, token_only=False, wait=150):
