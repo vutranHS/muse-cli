@@ -34,23 +34,48 @@ def onboard(name, timeout=600):
     out = os.path.join(HERE, "accounts", f"{name}.txt")
 
     captured = {"email": None}
+    full_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
-    def on_req(req):
-        try:
-            if req.method != "POST" or captured["email"]:
-                return
-            u = req.url
-            if not any(s in u for s in ("login", "auth", "checkpoint",
-                                        "accounts.meta.com", "facebook.com")):
-                return
-            pd = req.post_data or ""
-            m = re.search(r'(?:^|&)(?:email|username|contactpoint|user|ur)=([^&]+)', pd)
-            if m:
-                v = urllib.parse.unquote_plus(m.group(1)).strip()
-                if v and ("@" in v or v.replace("+", "").isdigit() or len(v) >= 4):
-                    captured["email"] = v
-        except Exception:
-            pass
+    def better(cur, new):
+        # prefer a complete email over a partial; else keep the longer value
+        if not new:
+            return cur
+        if full_re.match(new) and not (cur and full_re.match(cur)):
+            return new
+        if cur and full_re.match(cur) and not full_re.match(new):
+            return cur
+        return new if len(new) > len(cur or "") else cur
+
+    def rec(source, val):
+        v = (val or "").strip()
+        if v and ("@" in v or v.replace("+", "").isdigit()):
+            captured["email"] = better(captured["email"], v)
+
+    # Primary capture: read the email field at the moment the user clicks
+    # "Continue"/submits (so we get the full value, not a mid-typing snapshot).
+    click_js = r"""
+      function grab(){
+        for (const el of document.querySelectorAll('input')) {
+          var s=((el.name||'')+' '+(el.id||'')+' '+(el.type||'')+' '+
+                 ((el.autocomplete)||'')).toLowerCase();
+          if ((el.type==='email' || /email|username|phone|contact|login|user/.test(s))
+              && el.value) { try{ window.__recEmail(el.value); }catch(_){} return; }
+        }
+      }
+      document.addEventListener('click', grab, true);
+      document.addEventListener('submit', grab, true);
+      document.addEventListener('keydown', function(e){ if(e.key==='Enter') grab(); }, true);
+    """
+
+    scan_js = """() => {
+      for (const el of document.querySelectorAll('input')) {
+        const s=((el.name||'')+' '+(el.id||'')+' '+(el.type||'')+' '+
+                 ((el.autocomplete)||'')).toLowerCase();
+        if ((el.type==='email' || /email|username|phone|contact|login|user/.test(s))
+            && el.value && el.value.length>=4) return el.value;
+      }
+      return null;
+    }"""
 
     with sync_playwright() as p:
         try:
@@ -59,62 +84,33 @@ def onboard(name, timeout=600):
                 args=["--no-first-run", "--no-default-browser-check"])
         except Exception:
             ctx = p.chromium.launch_persistent_context(prof, headless=False)
-        ctx.on("page", lambda pg: pg.on("request", on_req))
+        ctx.expose_binding("__recEmail", rec)
+        ctx.add_init_script(click_js)
 
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        page.on("request", on_req)
         page.goto("https://muse.ai/", wait_until="domcontentloaded")
         print("→ Log in with Facebook in the opened window. Waiting for session…")
 
-        scan_js = """() => {
-          for (const el of document.querySelectorAll('input')) {
-            const s=((el.name||'')+' '+(el.id||'')+' '+(el.type||'')+' '+
-                     ((el.autocomplete)||'')).toLowerCase();
-            if ((el.type==='email' || /email|username|phone|contact|login|user/.test(s))
-                && el.value && el.value.length>=4) return el.value;
-          }
-          return null;
-        }"""
-
-        full_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
         def scan_email():
-            best = ""
             for pg in ctx.pages:
                 for fr in pg.frames:
                     try:
                         v = fr.evaluate(scan_js)
                     except Exception:
                         continue
-                    if not v:
-                        continue
-                    v = v.strip()
-                    if "@" in v or v.replace("+", "").isdigit():
-                        if len(v) > len(best):
-                            best = v
-            return best
-
-        def better(cur, new):
-            # keep a complete email over a partial; else keep the longer value
-            if not new:
-                return cur
-            if full_re.match(new) and not (cur and full_re.match(cur)):
-                return new
-            if full_re.match(cur) and not full_re.match(new):
-                return cur
-            return new if len(new) > len(cur or "") else cur
+                    if v:
+                        captured["email"] = better(captured["email"], v.strip())
 
         deadline = time.time() + timeout
         got = None
         while time.time() < deadline:
-            captured["email"] = better(captured["email"], scan_email())
+            scan_email()  # fallback if click capture missed
             names = {c["name"] for c in ctx.cookies()}
             if "hatch_sess" in names:
                 got = ctx.cookies()
                 break
-            time.sleep(0.4)
-        # one last scan in case the field is still filled at completion
-        captured["email"] = better(captured["email"], scan_email())
+            time.sleep(0.5)
+        scan_email()
         if not got:
             ctx.close()
             raise SystemExit("timed out waiting for login (no hatch_sess cookie)")
