@@ -60,19 +60,43 @@ def onboard(name, timeout=600):
         except Exception:
             ctx = p.chromium.launch_persistent_context(prof, headless=False)
         ctx.on("page", lambda pg: pg.on("request", on_req))
+
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.on("request", on_req)
         page.goto("https://muse.ai/", wait_until="domcontentloaded")
         print("→ Log in with Facebook in the opened window. Waiting for session…")
 
+        scan_js = """() => {
+          for (const el of document.querySelectorAll('input')) {
+            const s=((el.name||'')+' '+(el.id||'')+' '+(el.type||'')+' '+
+                     ((el.autocomplete)||'')).toLowerCase();
+            if ((el.type==='email' || /email|username|phone|contact|login|user/.test(s))
+                && el.value && el.value.length>=4) return el.value;
+          }
+          return null;
+        }"""
+
+        def scan_email():
+            for pg in ctx.pages:
+                for fr in pg.frames:
+                    try:
+                        v = fr.evaluate(scan_js)
+                    except Exception:
+                        continue
+                    if v and ("@" in v or v.replace("+", "").isdigit()):
+                        return v.strip()
+            return None
+
         deadline = time.time() + timeout
         got = None
         while time.time() < deadline:
+            if not captured["email"]:
+                captured["email"] = scan_email()
             names = {c["name"] for c in ctx.cookies()}
             if "hatch_sess" in names:
                 got = ctx.cookies()
                 break
-            time.sleep(2)
+            time.sleep(1)
         if not got:
             ctx.close()
             raise SystemExit("timed out waiting for login (no hatch_sess cookie)")
