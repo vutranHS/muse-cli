@@ -81,24 +81,24 @@ def _connect_token():
     return muse.Gateway(cookies="", vm_id=vm, access_token="unused", hatch_token=tok)
 
 
-def _find_new_image(gw, prompt, baseline, deadline):
-    """Poll chat.history for an assistant image reply newer than baseline."""
+def _field(ev, key):
+    return ev.get(key) if ev.get(key) is not None else (ev.get("payload", {}) or {}).get(key)
+
+
+def _find_new_image(gw, session_id, deadline):
+    """Poll the isolated session's history for its image. Since the session is
+    fresh and single-use, the only image/reply there is ours."""
     while time.time() < deadline:
         try:
-            h = gw.call_json("chat.history", body={"limit": 15})
+            h = gw.call_json("chat.history", body={"limit": 15, "session_id": session_id})
         except (muse.GatewayError, TimeoutError):
             time.sleep(3); continue
-        for ev in sorted(h.get("chat_events", []), key=lambda e: e.get("seq", 0)):
-            if ev.get("seq", 0) <= baseline:
-                continue
-            blob = json.dumps(ev)
-            # a quota/refusal text reply (no image) -> rotate
-            if '"role":"assistant"' in blob or ev.get("role") == "assistant":
-                m = re.search(r'workspace/imagine_media/[^"\\]+?\.webp', blob)
-                if m:
-                    return m.group(0)
-                txt = (ev.get("payload", {}) or {}).get("display_text") \
-                    or ev.get("display_text") or ""
+        m = re.search(r'workspace/imagine_media/[^"\\]+?\.webp', json.dumps(h))
+        if m:
+            return m.group(0)
+        for ev in h.get("chat_events", []):
+            if _field(ev, "role") == "assistant":
+                txt = _field(ev, "display_text") or ""
                 if txt and QUOTA_RX.search(txt):
                     raise Quota(txt[:200])
         time.sleep(3)
@@ -106,18 +106,32 @@ def _find_new_image(gw, prompt, baseline, deadline):
 
 
 def gen_once(gw, prompt, wait=150):
-    baseline = 0
-    h = gw.call_json("chat.history", body={"limit": 1})
-    evs = h.get("chat_events", [])
-    baseline = max([e.get("seq", 0) for e in evs], default=0)
+    # Every gen runs in its OWN fresh session so concurrent gens never share a
+    # chat (no race, no cross-wired images). Cleaned up afterwards.
+    d = gw.call_json("session.start", body={
+        "method": "/api/session/start",
+        "params": {"origin": "fresh", "lifecycle": "persistent", "title": "gen"}})
+    sid = d.get("session_id") or d.get("id")
 
-    params = {"items": [{"type": "text", "text": prompt}],
-              "node_id": secrets.token_hex(8), "capabilities": {}}
-    gw._open("chat.stream", body=params)
+    try:
+        params = {"items": [{"type": "text", "text": prompt}],
+                  "node_id": secrets.token_hex(8), "capabilities": {},
+                  "session_id": sid}
+        gw._open("chat.stream", body=params)
 
-    path = _find_new_image(gw, prompt, baseline, time.time() + wait)
-    if not path:
-        raise TimeoutError(f"no image within {wait}s")
+        path = _find_new_image(gw, sid, time.time() + wait)
+        if not path:
+            raise TimeoutError(f"no image within {wait}s")
+        return path, _fetch_image(gw, path)
+    finally:
+        try:
+            gw.call_json("session.delete",
+                         body={"method": "/api/session/delete", "session_id": sid})
+        except Exception:
+            pass
+
+
+def _fetch_image(gw, path):
     muse.ROUTES["media.raw"] = {"method": "media.raw", "http": "GET",
                                "path": "/media/raw/" + path,
                                "responseType": "binary", "channel": "media"}
@@ -129,7 +143,7 @@ def gen_once(gw, prompt, wait=150):
     for attempt in (1, 2):
         data = gw.request("media.raw", timeout=to * attempt)
         if _complete_image(data):
-            return path, data
+            return data
     raise RuntimeError(f"truncated image ({len(data)}B, "
                        f"expected {_expected_len(data)}) after retries")
 
