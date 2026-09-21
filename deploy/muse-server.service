@@ -1,0 +1,17 @@
+[Unit]
+Description=Muse OpenAI-images server (musegen)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/muse-farm
+# 127.0.0.1 if 9router runs with --network host; 0.0.0.0 if it reaches via host.docker.internal
+Environment=MUSE_HOST=127.0.0.1
+Environment=MUSE_PORT=8799
+Environment=MUSE_MEDIA_TIMEOUT=90
+ExecStart=/opt/muse-farm/.venv/bin/python server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
