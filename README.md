@@ -22,13 +22,18 @@ python3 -m venv .venv
 ```
 
 ## Accounts (one-time per account)
-Credential = **muse.ai cookies** (`hatch_sess` + `datr`). Fresh gateway tokens
-are minted each run from these.
+Credential = **muse.ai cookies** (Facebook login). Easiest: Playwright grabs
+them for you, incl. HttpOnly:
 
-1. Log in to https://muse.ai/ in a browser.
-2. Save cookies to `accounts/<name>.txt`, curl-style:
-   `hatch_sess=...; datr=...`
-   (Netscape cookie-jar files also work.)
+```bash
+./.venv/bin/python login.py acc1   # opens Chrome -> log in with Facebook
+```
+It waits for `hatch_sess`, writes `accounts/acc1.txt`, and verifies. Each
+account keeps its own browser profile under `profiles/<name>`.
+
+Manual fallback: copy the `hatch_sess` (+ `datr`) cookie from DevTools
+(Application -> Cookies -> https://muse.ai) into `accounts/<name>.txt`
+(`hatch_sess=...; datr=...`), or use `./add-account.sh <name> '<cookiestr>'`.
 
 ## Usage
 ```bash

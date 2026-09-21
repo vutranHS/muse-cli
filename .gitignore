@@ -5,3 +5,4 @@ accounts/*.txt
 *.b64
 __pycache__/
 .idea/
+profiles/
