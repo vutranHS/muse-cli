@@ -16,7 +16,7 @@ part after the slash is the account selector.)
 Run:  ./.venv/bin/python server.py            # 127.0.0.1:8799
       MUSE_PORT=8799 MUSE_HOST=127.0.0.1 ...
 """
-import base64, glob, json, os, sys, time
+import base64, glob, json, os, sys, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,6 +26,65 @@ import musegen  # gen(), accounts()
 HOST = os.environ.get("MUSE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("MUSE_PORT", "8799"))
 WAIT = int(os.environ.get("MUSE_WAIT", "180"))
+# how long a request may wait in the queue for a free account before 429
+QUEUE_WAIT = int(os.environ.get("MUSE_QUEUE_WAIT", "900"))
+
+
+class _Pool:
+    """One in-flight gen per account (a VM allows one WS at a time). Concurrent
+    requests beyond the account count wait here instead of erroring."""
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._inuse = set()
+
+    def _names(self):
+        return [os.path.splitext(os.path.basename(f))[0] for f in musegen.accounts()]
+
+    def acquire(self, deadline, only=None, exclude=()):
+        with self._cond:
+            while True:
+                names = [only] if only else self._names()
+                free = [n for n in names if n not in self._inuse and n not in exclude]
+                if free:
+                    self._inuse.add(free[0])
+                    return free[0]
+                # nothing free (or the forced one is busy) -> wait for a release
+                rem = deadline - time.time()
+                if rem <= 0 or (not only and not self._names()):
+                    return None
+                self._cond.wait(min(rem, 5))
+
+    def release(self, name):
+        with self._cond:
+            self._inuse.discard(name)
+            self._cond.notify_all()
+
+
+POOL = _Pool()
+
+
+def gen_pooled(prompt, only=None, deadline=None):
+    """Acquire a free account (queueing if all busy), gen, release. On a
+    per-account failure, drop it for this request and try another."""
+    if deadline is None:
+        deadline = time.time() + QUEUE_WAIT
+    tried, last = set(), None
+    while time.time() < deadline:
+        acc = POOL.acquire(deadline, only=only, exclude=tried)
+        if acc is None:
+            break
+        try:
+            return musegen.gen(prompt, account=acc, wait=WAIT)
+        except musegen.Quota as e:
+            last = f"{acc}: quota {e}"
+        except SystemExit as e:            # single-account gen exhausted (busy/auth)
+            last = f"{acc}: {e}"
+        except Exception as e:
+            last = f"{acc}: {e}"
+        finally:
+            POOL.release(acc)
+        tried.add(acc)                     # don't reuse a failed account this request
+    raise RuntimeError(f"queue timeout / all accounts unavailable; last: {last}")
 
 
 _HQ = "high resolution, high quality, sharp, clean crisp edges"
@@ -141,10 +200,12 @@ class H(BaseHTTPRequestHandler):
         rf = body.get("response_format", "b64_json")
         eff_prompt = augment_prompt(prompt, body)
 
+        deadline = time.time() + QUEUE_WAIT
         data = []
         try:
             for _ in range(count):
-                name, path, img = musegen.gen(eff_prompt, account=account, wait=WAIT)
+                # queue for a free account instead of erroring when all are busy
+                name, path, img = gen_pooled(eff_prompt, only=account, deadline=deadline)
                 if rf == "url":
                     # no hosted URL; return a data URL so OpenAI clients still work
                     b64 = base64.b64encode(img).decode()
@@ -153,10 +214,8 @@ class H(BaseHTTPRequestHandler):
                 else:
                     data.append({"b64_json": base64.b64encode(img).decode(),
                                  "revised_prompt": prompt, "muse_account": name})
-        except SystemExit as e:  # all accounts exhausted
-            return self._err(429, str(e), "insufficient_quota")
         except Exception as e:
-            return self._err(502, f"muse gen failed: {e}", "api_error")
+            return self._err(429, f"queue/accounts unavailable: {e}", "insufficient_quota")
 
         return self._send(200, {"created": int(time.time()), "data": data})
 
