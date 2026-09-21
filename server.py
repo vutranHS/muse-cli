@@ -28,7 +28,7 @@ PORT = int(os.environ.get("MUSE_PORT", "8799"))
 WAIT = int(os.environ.get("MUSE_WAIT", "180"))
 
 
-_HQ = "high resolution, sharp, clean edges"
+_HQ = "high resolution, high quality, sharp, clean crisp edges"
 _RATIO = {
     "1024x1024": "1:1", "512x512": "1:1", "2048x2048": "1:1",
     "1792x1024": "16:9", "1344x768": "16:9", "1920x1080": "16:9",
@@ -66,8 +66,10 @@ def augment_prompt(prompt, body):
         # short ratio + general anti-distort (no shape assumption)
         parts.append(f"{ratio} aspect ratio; keep the artwork's original "
                      "proportions, do not stretch, squash, or distort any element")
-    q = (body.get("quality") or "").lower()
-    if q in ("hd", "high", "max", "maximum", "best") and len(prompt) < 200:
+    # highest quality by default (safe, style-neutral words); opt out with
+    # quality=standard/low.
+    q = (body.get("quality") or "hd").lower()
+    if q in ("hd", "high", "max", "maximum", "best"):
         parts.append(_HQ)
     return " — ".join(parts) if len(parts) > 1 else prompt
 
