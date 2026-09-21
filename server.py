@@ -78,6 +78,18 @@ class _Pool:
 
 POOL = _Pool()
 
+DRAW_LOG = os.path.join(HERE, "draw.log")
+_LOG_LOCK = threading.Lock()
+
+
+def drawlog(msg):
+    line = time.strftime("%Y-%m-%d %H:%M:%S") + " | " + msg + "\n"
+    try:
+        with _LOG_LOCK, open(DRAW_LOG, "a") as f:
+            f.write(line)
+    except Exception:
+        pass
+
 
 def gen_pooled(prompt, only=None, deadline=None):
     """Acquire a free account (queueing if all busy), gen, release. On a
@@ -221,7 +233,10 @@ class H(BaseHTTPRequestHandler):
         try:
             for _ in range(count):
                 # queue for a free account instead of erroring when all are busy
+                t0 = time.time()
                 name, path, img = gen_pooled(eff_prompt, only=account, deadline=deadline)
+                drawlog(f"{name:8} | {time.time()-t0:5.1f}s | {len(img):>8}B | "
+                        f"{prompt[:45]!r} | {path.split('/')[-1]}")
                 if rf == "url":
                     # no hosted URL; return a data URL so OpenAI clients still work
                     b64 = base64.b64encode(img).decode()
@@ -231,6 +246,7 @@ class H(BaseHTTPRequestHandler):
                     data.append({"b64_json": base64.b64encode(img).decode(),
                                  "revised_prompt": prompt, "muse_account": name})
         except Exception as e:
+            drawlog(f"FAIL     |   -   |        - | {prompt[:45]!r} | {e}")
             return self._err(429, f"queue/accounts unavailable: {e}", "insufficient_quota")
 
         return self._send(200, {"created": int(time.time()), "data": data})
