@@ -56,7 +56,10 @@ def augment_prompt(prompt, body):
             ar = ""
     if ar:
         extra.append(f"{ar} aspect ratio")
-    if (body.get("quality") or "").lower() in ("hd", "high", "max", "maximum", "best"):
+    # default to HD when the caller doesn't specify quality; honor an explicit
+    # "standard"/"low" to opt out.
+    q = (body.get("quality") or "hd").lower()
+    if q in ("hd", "high", "max", "maximum", "best"):
         extra.append(_HQ)
     return prompt + (" — " + ", ".join(extra) if extra else "")
 
