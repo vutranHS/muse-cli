@@ -76,27 +76,45 @@ def onboard(name, timeout=600):
           return null;
         }"""
 
+        full_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
         def scan_email():
+            best = ""
             for pg in ctx.pages:
                 for fr in pg.frames:
                     try:
                         v = fr.evaluate(scan_js)
                     except Exception:
                         continue
-                    if v and ("@" in v or v.replace("+", "").isdigit()):
-                        return v.strip()
-            return None
+                    if not v:
+                        continue
+                    v = v.strip()
+                    if "@" in v or v.replace("+", "").isdigit():
+                        if len(v) > len(best):
+                            best = v
+            return best
+
+        def better(cur, new):
+            # keep a complete email over a partial; else keep the longer value
+            if not new:
+                return cur
+            if full_re.match(new) and not (cur and full_re.match(cur)):
+                return new
+            if full_re.match(cur) and not full_re.match(new):
+                return cur
+            return new if len(new) > len(cur or "") else cur
 
         deadline = time.time() + timeout
         got = None
         while time.time() < deadline:
-            if not captured["email"]:
-                captured["email"] = scan_email()
+            captured["email"] = better(captured["email"], scan_email())
             names = {c["name"] for c in ctx.cookies()}
             if "hatch_sess" in names:
                 got = ctx.cookies()
                 break
-            time.sleep(1)
+            time.sleep(0.4)
+        # one last scan in case the field is still filled at completion
+        captured["email"] = better(captured["email"], scan_email())
         if not got:
             ctx.close()
             raise SystemExit("timed out waiting for login (no hatch_sess cookie)")
