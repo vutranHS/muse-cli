@@ -161,23 +161,20 @@ def gen(prompt, account=None, token_only=False, wait=150):
         finally:
             gw.close()
 
-    files = [os.path.join(ACCOUNTS_DIR, account + ".txt")] if account else accounts()
-    if not files:
-        raise SystemExit(f"no accounts in {ACCOUNTS_DIR} (see --help)")
+    if account:
+        candidates = [(os.path.join(ACCOUNTS_DIR, account + ".txt"), account)]
+    else:
+        allf = accounts()
+        if not allf:
+            raise SystemExit(f"no accounts in {ACCOUNTS_DIR} (see --help)")
+        candidates = _ranked_candidates(allf)
+        if not candidates:
+            raise SystemExit("all accounts exhausted (quota)")
+
     last = None
-    for f in files:
-        name = os.path.splitext(os.path.basename(f))[0]
-        cookies = muse.load_cookies(f)
-        # authoritative pre-check: skip accounts that are out of quota fast
+    for f, name in candidates:
         try:
-            q = account_quota(cookies)
-            if not q["usable"]:
-                last = f"{name}: quota {q['quota_status']} ({q['percent_used']}% used)"
-                print(f"[skip] {last}", file=sys.stderr); continue
-        except Exception as e:
-            print(f"[warn] {name}: quota check failed ({e}); trying anyway", file=sys.stderr)
-        try:
-            gw = muse.Gateway(cookies)
+            gw = muse.Gateway(muse.load_cookies(f))
         except muse.AuthError as e:
             last = f"{name}: auth {e}"; print(f"[skip] {last}", file=sys.stderr); continue
         try:
@@ -190,6 +187,35 @@ def gen(prompt, account=None, token_only=False, wait=150):
         finally:
             gw.close()
     raise SystemExit(f"all accounts exhausted; last: {last}")
+
+
+def _ranked_candidates(files):
+    """Order accounts best-first: usable sorted by (topup desc, percent_used asc);
+    quota-check failures go last (still tried); exhausted accounts dropped."""
+    import concurrent.futures as cf
+
+    def info(f):
+        name = os.path.splitext(os.path.basename(f))[0]
+        try:
+            return (f, name, account_quota(muse.load_cookies(f)), None)
+        except Exception as e:
+            return (f, name, None, str(e))
+
+    with cf.ThreadPoolExecutor(max_workers=8) as ex:
+        rows = list(ex.map(info, files))
+
+    usable, unknown = [], []
+    for f, name, q, err in rows:
+        if q is None:
+            print(f"[warn] {name}: quota check failed ({err})", file=sys.stderr)
+            unknown.append((f, name))
+        elif q["usable"]:
+            usable.append((f, name, q))
+        else:
+            print(f"[skip] {name}: quota {q['quota_status']} ({q['percent_used']}% used)",
+                  file=sys.stderr)
+    usable.sort(key=lambda t: (-(t[2]["topup_balance"] or 0), t[2]["percent_used"] or 0))
+    return [(f, name) for f, name, _ in usable] + unknown
 
 
 def main():
