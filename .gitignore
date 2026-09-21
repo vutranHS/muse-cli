@@ -1,0 +1,7 @@
+.venv/
+accounts/*.txt
+*.webp
+*.png
+*.b64
+__pycache__/
+.idea/
