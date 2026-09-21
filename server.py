@@ -36,6 +36,7 @@ class _Pool:
     def __init__(self):
         self._cond = threading.Condition()
         self._inuse = set()
+        self._last = None  # last account handed out (round-robin cursor)
 
     def _names(self):
         return [os.path.splitext(os.path.basename(f))[0] for f in musegen.accounts()]
@@ -43,14 +44,29 @@ class _Pool:
     def acquire(self, deadline, only=None, exclude=()):
         with self._cond:
             while True:
-                names = [only] if only else self._names()
-                free = [n for n in names if n not in self._inuse and n not in exclude]
-                if free:
-                    self._inuse.add(free[0])
-                    return free[0]
+                names = self._names()
+                if only:
+                    pick = only if (only not in self._inuse and only not in exclude
+                                    and only in names) else None
+                else:
+                    # round-robin: start right after the last-used account and take
+                    # the first free one, so load spreads evenly across accounts.
+                    n = len(names)
+                    start = (names.index(self._last) + 1) if self._last in names else 0
+                    pick = None
+                    for k in range(n):
+                        cand = names[(start + k) % n]
+                        if cand not in self._inuse and cand not in exclude:
+                            pick = cand
+                            break
+                if pick:
+                    self._inuse.add(pick)
+                    if not only:
+                        self._last = pick
+                    return pick
                 # nothing free (or the forced one is busy) -> wait for a release
                 rem = deadline - time.time()
-                if rem <= 0 or (not only and not self._names()):
+                if rem <= 0 or not names:
                     return None
                 self._cond.wait(min(rem, 5))
 
