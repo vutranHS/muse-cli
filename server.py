@@ -56,6 +56,19 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.rstrip("/") == "/healthz":
             return self._send(200, {"ok": True})
+        if self.path.rstrip("/") == "/v1/usage":
+            import concurrent.futures as _cf
+            def one(f):
+                name = os.path.splitext(os.path.basename(f))[0]
+                try:
+                    q = musegen.account_quota(musegen.muse.load_cookies(f))
+                    q["account"] = name
+                    return q
+                except Exception as e:
+                    return {"account": name, "error": str(e)}
+            with _cf.ThreadPoolExecutor(max_workers=8) as ex:
+                rows = list(ex.map(one, musegen.accounts()))
+            return self._send(200, {"object": "list", "data": rows})
         if self.path.rstrip("/") == "/v1/models":
             names = [os.path.splitext(os.path.basename(f))[0]
                      for f in musegen.accounts()]

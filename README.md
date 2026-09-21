@@ -67,3 +67,14 @@ curl -X POST localhost:8799/v1/images/generations \
 ```
 `model`: `muse` or `muse/default` = rotate accounts; `muse/<name>` = force one.
 `GET /v1/models` lists accounts. Env: MUSE_PORT, MUSE_HOST, MUSE_MEDIA_TIMEOUT.
+
+## Quota / usage (authoritative)
+The muse.ai access_token IS the `hatch-api.meta.ai` ABRA bearer, so quota is read
+directly (no guessing):
+```bash
+./.venv/bin/python musegen.py --quota          # table per account
+curl -s localhost:8799/v1/usage | jq           # JSON per account
+```
+Fields: tier, quota_status (SUFFICIENT = usable), percent_used (weekly),
+resets_at, topup_balance + topup_label ("additional tokens" add-on).
+gen() pre-checks quota_status and skips exhausted accounts instantly.

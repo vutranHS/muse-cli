@@ -34,6 +34,40 @@ def accounts():
     return sorted(glob.glob(os.path.join(ACCOUNTS_DIR, "*.txt")))
 
 
+# --- authoritative quota via hatch-api.meta.ai (the access_token IS the ABRA bearer) ---
+from curl_cffi import requests as _rq
+
+HATCH_API = "https://hatch-api.meta.ai"
+
+
+def _hatch_api_headers(token):
+    return {"Host": "hatch-api.meta.ai", "X-API-Version": "1.0.0",
+            "Accept": "application/json",
+            "User-Agent": "Muse/1071881651 CFNetwork/3860.600.21 Darwin/25.5.0",
+            "Authorization": f"Bearer {token}"}
+
+
+def account_quota(cookies):
+    """Return {tier, quota_status, percent_used, resets_at, topup_balance,
+    topup_label, usable} for an account's cookies. usable=True means it can
+    generate right now (quota_status SUFFICIENT)."""
+    at = muse.fetch_access_token(cookies)
+    r = _rq.get(HATCH_API + "/hatch/subscription?include=agreement",
+                headers=_hatch_api_headers(at), impersonate="chrome", timeout=20)
+    r.raise_for_status()
+    d = r.json()
+    u = d.get("usage", {}) or {}
+    return {
+        "tier": (d.get("tier") or {}).get("tier_code"),
+        "quota_status": u.get("quota_status"),
+        "percent_used": u.get("percent_used"),
+        "resets_at": u.get("resets_at"),
+        "topup_balance": d.get("topup_balance"),
+        "topup_label": d.get("topup_row_value_label"),
+        "usable": u.get("quota_status") == "SUFFICIENT",
+    }
+
+
 def _connect_cookies(path):
     cookies = muse.load_cookies(path)
     if not cookies.strip():
@@ -133,8 +167,17 @@ def gen(prompt, account=None, token_only=False, wait=150):
     last = None
     for f in files:
         name = os.path.splitext(os.path.basename(f))[0]
+        cookies = muse.load_cookies(f)
+        # authoritative pre-check: skip accounts that are out of quota fast
         try:
-            gw = _connect_cookies(f)
+            q = account_quota(cookies)
+            if not q["usable"]:
+                last = f"{name}: quota {q['quota_status']} ({q['percent_used']}% used)"
+                print(f"[skip] {last}", file=sys.stderr); continue
+        except Exception as e:
+            print(f"[warn] {name}: quota check failed ({e}); trying anyway", file=sys.stderr)
+        try:
+            gw = muse.Gateway(cookies)
         except muse.AuthError as e:
             last = f"{name}: auth {e}"; print(f"[skip] {last}", file=sys.stderr); continue
         try:
@@ -158,11 +201,24 @@ def main():
     ap.add_argument("--token-only", action="store_true",
                     help="use MUSE_VM_ID + MUSE_HATCH_TOKEN env, skip cookies")
     ap.add_argument("--list", action="store_true", help="list accounts and exit")
+    ap.add_argument("--quota", action="store_true", help="show quota/usage per account and exit")
     a = ap.parse_args()
 
     if a.list:
         for f in accounts():
             print(os.path.splitext(os.path.basename(f))[0])
+        return
+
+    if a.quota:
+        files = [os.path.join(ACCOUNTS_DIR, a.account + ".txt")] if a.account else accounts()
+        for f in files:
+            name = os.path.splitext(os.path.basename(f))[0]
+            try:
+                q = account_quota(muse.load_cookies(f))
+                print(f"{name:12} {q['tier']:12} {q['quota_status']:12} "
+                      f"weekly {q['percent_used']}% used | {q['topup_label']}")
+            except Exception as e:
+                print(f"{name:12} ERROR {e}")
         return
     if not a.prompt:
         ap.error("prompt required")
